@@ -86,42 +86,36 @@ def get_firmware_version()->tuple:
 
 
 
-
 def set_device_name_extended(device_name: str) -> tuple:
     """
-    Sets the BLE device name in extended advertising mode using the SERD command.
+    Sets the BLE device name in extended advertising mode using the SEAD command.
     The payload format is:
-      - Length (hex): total bytes for type + device name
-      - Type (09): AD type for Complete Local Name
+      - Length (hex): total bytes for type + device name (length = len(name_bytes) + 1)
+      - Type (08): AD type for Shortened Local Name
       - Device Name: the UTF-8 encoded name in hex
 
     For example, for "HAMED_BLE_5":
-      - Name bytes: 11 bytes, so length = 0x0C (12 in decimal)
-      - Payload: "0C0948414D45445F424C455F35"
-    """
-    # Stop extended advertising before updating
-    # send_custom_command_text("/CAX")
+      - If the name is 11 bytes, total length = 12 (0x0C)
+      - The payload becomes "0C08" followed by the hex representation of "HAMED_BLE_5"
 
+    The command is then sent using SEAD with T=1.
+    """
     # Convert the device name to bytes and then to a hex string.
     name_bytes = device_name.encode('utf-8')
-    # Total length includes the 1-byte type (0x09)
+    # Total length includes the 1-byte type (0x08)
     total_length = len(name_bytes) + 1
     # Format length as a 2-digit uppercase hex string
     length_hex = f"{total_length:02X}"
-    # The AD type for Complete Local Name is 0x09
-    ad_type = "09"
+    # The AD type for Shortened Local Name is 0x08
+    ad_type = "08"
     # Convert the device name bytes to an uppercase hex string
     name_hex = name_bytes.hex().upper()
-
-    # Build the full payload
+    # Build the full payload: length + AD type + name
     payload = length_hex + ad_type + name_hex
-
-    # Build and send the SERD command
-    serd_command = f"SERD,T=01,D={payload}"
-    success, error_code, response = send_custom_command_text(serd_command)
-
+    # Build and send the SEAD command using T=1
+    sead_command = f"SEAD,T=1,D={payload}"
+    success, error_code, response = send_custom_command_text(sead_command)
     return success, error_code, response
-
 
 
 
@@ -207,7 +201,7 @@ def reset_factory()->tuple:
 
 
 
-def extended_adv_config(P="01", M="01", T="09", H="00", I="00A0", C="07",
+def extended_adv_config(P="01", M="00", T="08", H="00", I="00A0", C="07",
                         L="00", O="0000", F="02", A="000000000000",
                         Y="00", E="00", S="00", D="00", N="0018")->tuple:
     """
@@ -722,40 +716,40 @@ class ADType(Enum):
 
 def set_custom_adv_payload(data: str, ad_type: ADType, append: bool = False) -> tuple:
     """
-    Sets (or appends to) the extended advertisement payload using a SERD command.
+    Sets (or appends to) the extended advertisement payload using a SEAD command.
 
     For most AD types, the payload format is:
         [Length][AD Type][Data]
-    For Manufacturer Specific Data (0xFF), the payload format is:
+    For Manufacturer Specific Data (AD Type 0xFF), the payload format is:
         [Length][AD Type][Company ID][Data]
-    where the Company ID is 0x0131 (Infineon Semiconductor).
+    where the Company ID is fixed as "0900".
 
     Args:
         data (str): The advertisement data as a string. It will be UTF-8 encoded.
         ad_type (ADType): The advertisement data type from the ADType enum.
-        append (bool): If False, the payload is first cleared using SERD with T=00.
-                       If True, the new data is appended (SERD with T=01).
+        append (bool): If False, the payload is first cleared using SEAD with T=00.
+                       If True, the new data is appended using SEAD with T=01.
 
     Returns:
-        tuple: (success, error_code, response) from the SERD command.
+        tuple: (success, error_code, response) from sending the SEAD command.
     """
-    # If not appending, first clear the existing payload.
+    # If not appending, first clear the existing payload using SEAD with T=00.
     if not append:
-        send_custom_command_text("SERD,T=00,D=")
+        send_custom_command_text("SEAD,T=00,D=")
 
     # Encode the data into bytes.
     data_bytes = data.encode('utf-8')
 
     if ad_type == ADType.MANUFACTURER_SPECIFIC_DATA:
         # For Manufacturer Specific Data, insert the company ID.
-        # Company ID for Infineon Semiconductor is 0x0131 (2 bytes).
+        # Fixed Company ID is "0900".
         company_id = "0900"
-        # Total length is 1 byte (AD type) + 2 bytes (company ID) + len(data_bytes)
+        # Total length is: 1 byte for AD type + 2 bytes for Company ID + len(data_bytes)
         total_length = len(data_bytes) + 3
         length_hex = f"{total_length:02X}"
         ad_type_hex = f"{ad_type.value:02X}"
         data_hex = data_bytes.hex().upper()
-        # Build payload: length + AD type + company ID + data.
+        # Build payload: [Length][AD Type][Company ID][Data]
         payload = length_hex + ad_type_hex + company_id + data_hex
     else:
         # For other AD types, total length is 1 (AD type) + len(data_bytes)
@@ -763,12 +757,12 @@ def set_custom_adv_payload(data: str, ad_type: ADType, append: bool = False) -> 
         length_hex = f"{total_length:02X}"
         ad_type_hex = f"{ad_type.value:02X}"
         data_hex = data_bytes.hex().upper()
-        # Build payload: length + AD type + data.
+        # Build payload: [Length][AD Type][Data]
         payload = length_hex + ad_type_hex + data_hex
 
-    # Build and send the SERD command to append the payload (T=01).
-    serd_cmd = f"SERD,T=01,D={payload}"
-    return send_custom_command_text(serd_cmd)
+    # Build and send the SEAD command to append the payload (T=01).
+    sead_cmd = f"SEAD,T=01,D={payload}"
+    return send_custom_command_text(sead_cmd)
 
 
 
@@ -782,22 +776,33 @@ def set_custom_adv_payload(data: str, ad_type: ADType, append: bool = False) -> 
 
 
 
+#
+#
+# def get_gerd() -> tuple:
+#     """
+#     Sends the GERD command to retrieve the current advertising payload.
+#
+#     Returns:
+#         tuple: (success, error_code, response) from the BLE module.
+#                The response typically contains the raw hex payload in the form "D=<payload>".
+#     """
+#     return send_custom_command_text("GERD")
+#
 
 
 
 
 
-def get_gerd() -> tuple:
+
+def get_gead() -> tuple:
     """
-    Sends the GERD command to retrieve the current advertising payload.
+    Sends the GEAD command to retrieve the current extended advertising payload.
 
     Returns:
         tuple: (success, error_code, response) from the BLE module.
                The response typically contains the raw hex payload in the form "D=<payload>".
     """
-    return send_custom_command_text("GERD")
-
-
+    return send_custom_command_text("GEAD")
 
 
 
@@ -819,6 +824,86 @@ def get_gacp() -> tuple:
 
 
 
+def set_adv_interval(interval_ms: int) -> tuple:
+    """
+    Sets the advertising interval by updating the 'I' parameter in the extended
+    advertising configuration. The interval is specified in milliseconds and is
+    converted to 0.625 ms units (as a 4-digit hex string).
+
+    Valid range:
+      - Minimum: 20 ms (0x0020)
+      - Maximum: 10240 ms (0x4000)
+      - Factory default: 30 ms (0x0030)
+
+    Args:
+        interval_ms (int): The desired advertising interval in milliseconds.
+
+    Returns:
+        tuple: (success, error_code, response) from the extended_adv_config command.
+               If the interval is out of range, returns an error tuple.
+    """
+    # Check the limits (20 ms to 10240 ms)
+    if interval_ms < 20 or interval_ms > 10240:
+        return False, 0xEEEE, "Interval out of range. Must be between 20 ms and 10240 ms."
+
+    # Convert ms to units (each unit = 0.625 ms)
+    interval_units = int(round(interval_ms / 0.625))
+
+    # Format as a 4-digit uppercase hex string.
+    interval_hex = f"{interval_units:04X}"
+
+    # Update the extended advertising configuration by setting the I parameter.
+    return extended_adv_config(I=interval_hex)
+
+
+
+
+
+
+
+
+
+def get_gacp_details() -> tuple:
+    """
+    Query the module for extended advertising parameters using the "GACP" command.
+    Returns a tuple:
+       (success: bool, error_code: int, fields: list of (key, value) tuples, raw_response: str)
+
+    The returned 'fields' list contains parameter names and their corresponding values.
+    For example:
+       [("P", "01"), ("M", "01"), ("T", "09"), ("H", "00"), ("I", "00A0"), ...]
+    """
+    # Send the GACP command using the text mode interface.
+    success, error_code, response = send_custom_command_text("GACP")
+    if not success:
+        return success, error_code, None, response
+
+    try:
+        # Look for the "GACP," marker in the response and extract the parameter string.
+        start = response.find("GACP,")
+        if start != -1:
+            param_str = response[start + len("GACP,"):]
+        else:
+            # If not found, assume the entire response is the parameter string.
+            param_str = response
+
+        # Split the parameter string by commas.
+        parts = param_str.split(',')
+        fields = []
+        for part in parts:
+            part = part.strip()
+            if not part:
+                continue
+            if '=' in part:
+                key, value = part.split('=', 1)
+                fields.append((key.strip(), value.strip()))
+            else:
+                fields.append((part, None))
+
+        return True, 0, fields, response
+    except Exception as e:
+        # Return a parsing error.
+        return False, -1, None, response
 
 
 
@@ -836,7 +921,7 @@ def get_gacp() -> tuple:
 
 def get_adv_payload_details() -> tuple:
     """
-    Retrieves the current extended advertisement payload using the GERD command and
+    Retrieves the current extended advertisement payload using the GEAD command and
     parses it into its component fields.
 
     The expected format of the payload is a series of AD structures:
@@ -855,8 +940,8 @@ def get_adv_payload_details() -> tuple:
 
     If no payload is found or an error occurs, returns ("", []).
     """
-    # Issue the GERD command to get the advertisement payload.
-    success, error_code, response = send_custom_command_text("GERD")
+    # Issue the GEAD command to get the advertisement payload.
+    success, error_code, response = send_custom_command_text("GEAD")
     if not success:
         # In case of failure, return empty values.
         return ("", [])
@@ -911,77 +996,103 @@ def get_adv_payload_details() -> tuple:
 
 
 
-
-
-
 def print_adv_payload_details():
     """
-    Retrieves and prints the current extended advertisement payload.
+    Retrieves and prints the current extended advertisement payload using the GEAD command.
 
-    It calls get_adv_payload_details() to get:
-      - The raw payload (a hex string)
-      - A list of fields, each as a tuple: (field_length, ad_type, field_data)
+    The GEAD command returns a response that contains the payload as a hex string following ",D=".
+    This function extracts the raw payload, calculates its size, parses its fields, and prints for each:
+      - Field number, Length, AD Type (in hex and its enum name if available)
+      - The raw data (in hex) with its Unicode representation.
 
-    It then prints:
-      - The raw payload along with its total size in bytes.
-      - For each field: field number, Length, AD Type (in hex) with its enum name,
-        and the raw data in hex along with its ASCII and Unicode representations.
-
-    For Manufacturer Specific Data (AD Type 0xFF), the field data is assumed to be in the format:
-      [Company ID (2 bytes)][Additional Data]
-    In that case, only the Additional Data portion (skipping the first 4 hex characters) is decoded.
+    For Manufacturer Specific Data (AD Type 0xFF), the first 2 bytes (4 hex characters)
+    are interpreted as the Company ID, and the remaining bytes as additional data.
     """
-    raw_payload, fields = get_adv_payload_details()
+    # Send GEAD command and get response.
+    success, error_code, response = send_custom_command_text("GEAD")
+    if not success:
+        print("Failed to retrieve advertisement payload:", get_error_description(error_code))
+        return
 
-    if raw_payload:
-        # Calculate total raw payload size in bytes (each two hex characters represent one byte)
-        payload_size = len(raw_payload) // 2
-        print("\nRaw Payload:", raw_payload)
-        print(f"Total Raw Payload Size: {payload_size} bytes\n")
+    # Look for the payload data in the response (after ",D=")
+    payload_marker = ",D="
+    if payload_marker not in response:
+        print("No advertisement payload found in response.")
+        return
 
-        for idx, (length, ad_type, data) in enumerate(fields, start=1):
-            # Lookup AD type description using the ADType enum.
-            try:
-                ad_enum = ADType(ad_type)
-                desc = ad_enum.name.replace("_", " ").title()
-            except ValueError:
-                desc = "Unknown"
-
-            # Check if the field is Manufacturer Specific Data.
-            if ad_type == ADType.MANUFACTURER_SPECIFIC_DATA.value:
-                # For Manufacturer Specific Data, the first 2 bytes (4 hex characters) are the Company ID.
-                company_id = data[:4]
-                additional_data = data[4:]
-                # Decode only the additional data portion.
-                try:
-                    data_bytes = bytes.fromhex(additional_data)
-                    # ascii_repr = data_bytes.decode('ascii', errors='replace')
-                    unicode_repr = data_bytes.decode('utf-8', errors='replace')
-                except Exception:
-                    ascii_repr = "N/A"
-                    unicode_repr = "N/A"
-                print(f"Field {idx}: Length = {length}, AD Type = 0x{ad_type:02X} ({desc}), Data = {data}")
-                print(f"         Company ID       = {company_id}")
-                print(f"         Additional Data  = {additional_data}")
-                # print(f"         ASCII            = {ascii_repr}")
-                print(f"         Unicode          = {unicode_repr}")
-            else:
-                # For other AD types, decode the entire data string.
-                try:
-                    data_bytes = bytes.fromhex(data)
-                    # ascii_repr = data_bytes.decode('ascii', errors='replace')
-                    unicode_repr = data_bytes.decode('utf-8', errors='replace')
-                except Exception:
-                    ascii_repr = "N/A"
-                    unicode_repr = "N/A"
-                print(f"Field {idx}: Length = {length}, AD Type = 0x{ad_type:02X} ({desc}), Data = {data}")
-                # print(f"         ASCII            = {ascii_repr}")
-                print(f"         Unicode          = {unicode_repr}")
-    else:
+    # Extract raw payload (strip any trailing CR/LF)
+    raw_payload = response.split(payload_marker, 1)[1].strip()
+    if not raw_payload:
         print("No advertisement payload found.")
+        return
 
+    # Calculate total raw payload size in bytes.
+    payload_size = len(raw_payload) // 2
+    print("\nRaw Payload:", raw_payload)
+    print(f"Total Raw Payload Size: {payload_size} bytes\n")
 
+    # Parse the payload into fields.
+    fields = []
+    pos = 0
+    field_index = 1
+    while pos < len(raw_payload):
+        # Each field starts with a length byte (2 hex digits)
+        length_hex = raw_payload[pos:pos+2]
+        try:
+            field_length = int(length_hex, 16)
+        except ValueError:
+            print(f"Error parsing length at position {pos}")
+            break
+        pos += 2
 
+        # A field length of 0 means no further fields.
+        if field_length == 0:
+            break
+
+        # Next 2 hex digits are the AD Type.
+        ad_type_hex = raw_payload[pos:pos+2]
+        try:
+            ad_type = int(ad_type_hex, 16)
+        except ValueError:
+            ad_type = 0
+        pos += 2
+
+        # The remainder of the field is (field_length - 1) bytes.
+        data_length = (field_length - 1) * 2  # two hex digits per byte
+        data_hex = raw_payload[pos:pos+data_length]
+        pos += data_length
+
+        fields.append((field_length, ad_type, data_hex))
+
+    # Print details for each field.
+    for idx, (length, ad_type, data) in enumerate(fields, start=1):
+        try:
+            ad_enum = ADType(ad_type)
+            desc = ad_enum.name.replace("_", " ").title()
+        except ValueError:
+            desc = "Unknown"
+
+        if ad_type == ADType.MANUFACTURER_SPECIFIC_DATA.value:
+            # For Manufacturer Specific Data, the first 2 bytes (4 hex characters) are the Company ID.
+            company_id = data[:4]
+            additional_data = data[4:]
+            try:
+                data_bytes = bytes.fromhex(additional_data)
+                unicode_repr = data_bytes.decode('utf-8', errors='replace')
+            except Exception:
+                unicode_repr = "N/A"
+            print(f"Field {idx}: Length = {length}, AD Type = 0x{ad_type:02X} ({desc}), Data = {data}")
+            print(f"         Company ID       = {company_id}")
+            print(f"         Additional Data  = {additional_data}")
+            print(f"         Unicode          = {unicode_repr}")
+        else:
+            try:
+                data_bytes = bytes.fromhex(data)
+                unicode_repr = data_bytes.decode('utf-8', errors='replace')
+            except Exception:
+                unicode_repr = "N/A"
+            print(f"Field {idx}: Length = {length}, AD Type = 0x{ad_type:02X} ({desc}), Data = {data}")
+            print(f"         Unicode          = {unicode_repr}")
 
 
 
@@ -1007,9 +1118,14 @@ def set_smart_manufacturer_payload(total_payload_bytes: int) -> tuple:
          total_payload_bytes - 3
     (1 byte for AD type + 2 bytes for Company ID).
 
-    It uses an excerpt inspired by Thomas Paine's "Common Sense" as the base message:
-         "In these troubled times, the words of Thomas Paine remind us that government
-          exists not to oppress but to secure the rights of all men. Let us unite for liberty."
+    It uses an excerpt as the base message:
+         "Divine Mandate for Justice: Cyrus portrays his conquest as being guided by the gods—particularly Marduk—suggesting
+          that his rule is divinely sanctioned to bring order and relief. Restoration and Liberation: He emphasizes that
+          he has liberated people from the hardships and oppressions imposed by previous regimes. Respect for Cultural
+          and Religious Diversity: Cyrus underscores the importance of allowing conquered peoples to honor their own
+          traditions and religious practices. A New Era of Tolerance: By implementing policies that fostered freedom of
+          worship and the right to return home, Cyrus laid the groundwork for a more just and tolerant society. In essence,
+          the message is that legitimate rule comes with the responsibility to ensure the welfare and dignity of all people."
     This text is then cut (or padded) so that its UTF-8 encoding exactly fits the available space.
 
     Args:
@@ -1017,7 +1133,7 @@ def set_smart_manufacturer_payload(total_payload_bytes: int) -> tuple:
                                    This includes 1 byte for AD type, 2 bytes for Company ID, and the remainder for additional data.
 
     Returns:
-        tuple: (success, error_code, response) from sending the SERD command.
+        tuple: (success, error_code, response) from sending the SEAD command.
     """
     if total_payload_bytes < 3:
         return (False, 0xEEEE, "Total payload size must be at least 3 bytes.")
@@ -1025,22 +1141,18 @@ def set_smart_manufacturer_payload(total_payload_bytes: int) -> tuple:
     # Calculate available bytes for additional data.
     additional_data_length = total_payload_bytes - 3
 
-    # A famous excerpt inspired by Thomas Paine's "Common Sense"
     base_message = (
-        "Fellow citizens, in these hours of great challenge, let us recall the profound truths set forth by Thomas Paine "
-        "in his work 'Common Sense'. He urged us to question the legitimacy of inherited tyranny and to embrace the principles "
-        "of liberty, equality, and fraternity. In his passionate call for independence, Paine declared that government is a necessary "
-        "evil, designed by man for the protection of his natural rights, and not a divine institution to be blindly followed. "
-        "He challenged us to examine the foundations of power and to reject any system that does not guarantee the dignity and freedom "
-        "of the individual. His words continue to resonate in the hearts of those who seek a just and rational society. Let us be inspired "
-        "by his vision, daring to construct a future where every man and woman is free to pursue happiness and where government serves "
-        "only to safeguard our inalienable rights. May this message remind us that the spirit of revolution and the quest for justice are eternal, "
-        "and that each of us has a role to play in the ongoing struggle for a better world."
+        "Divine Mandate for Justice: Cyrus portrays his conquest as being guided by the gods—particularly Marduk—suggesting "
+        "that his rule is divinely sanctioned to bring order and relief. "
+        "Restoration and Liberation: He emphasizes that he has liberated people from the hardships and oppressions imposed by "
+        "previous regimes. Respect for Cultural and Religious Diversity: Cyrus underscores the importance of allowing conquered "
+        "peoples to honor their own traditions and religious practices. A New Era of Tolerance: By implementing policies that fostered "
+        "freedom of worship and the right to return home, Cyrus laid the groundwork for a more just and tolerant society. In essence, "
+        "the message is that legitimate rule comes with the responsibility to ensure the welfare and dignity of all people."
     )
 
     # Adjust the message so that its UTF-8 encoded byte length exactly matches additional_data_length.
-    # For simplicity, we assume each character is one byte (i.e. the text is plain ASCII).
-    # (If multi-byte characters are possible, further logic may be required.)
+    # For simplicity, we assume each character is one byte (i.e. plain ASCII).
     if len(base_message) < additional_data_length:
         additional_data = base_message + " " * (additional_data_length - len(base_message))
     else:
@@ -1049,20 +1161,21 @@ def set_smart_manufacturer_payload(total_payload_bytes: int) -> tuple:
     # Encode the additional data to bytes.
     data_bytes = additional_data.encode('utf-8')
 
-    # Total length (in bytes) is: 1 (for AD type) + 2 (for Company ID) + len(data_bytes)
+    # Total length is: 1 (for AD type) + 2 (for Company ID) + len(data_bytes)
     total_length = len(data_bytes) + 3
     length_hex = f"{total_length:02X}"
-    ad_type_hex = f"{ADType.MANUFACTURER_SPECIFIC_DATA.value:02X}"
-    # Use the fixed company ID "0900"
+    # Use AD Type "FF" for Manufacturer Specific Data.
+    ad_type_hex = "FF"
+    # Fixed company ID "0900" for Infineon.
     company_id = "0900"
     data_hex = data_bytes.hex().upper()
 
     # Build the payload: [Length][AD Type][Company ID][Additional Data]
     payload = length_hex + ad_type_hex + company_id + data_hex
 
-    # Build and send the SERD command (T=01 means append the payload)
-    serd_cmd = f"SERD,T=01,D={payload}"
-    return send_custom_command_text(serd_cmd)
+    # Build and send the SEAD command (T=01 means append the payload)
+    sead_cmd = f"SEAD,T=01,D={payload}"
+    return send_custom_command_text(sead_cmd)
 
 
 
@@ -1097,26 +1210,20 @@ def set_smart_manufacturer_payload(total_payload_bytes: int) -> tuple:
 
 
 
-
-
-def init_device(serial_port_par:str, device_name:str) -> tuple:
+def init_device(serial_port_par: str, device_name: str) -> tuple:
     """
     Initializes the device by rebooting it, configuring the extended advertising parameters,
     and erasing any existing advertisement payload. This function does not close the COM port,
     leaving the device ready for a new payload.
 
     Returns:
-        bool: True if all steps succeeded, False otherwise.
+        tuple: (True, ev_kit) if all steps succeeded, (False, ev_kit) otherwise.
     """
-    # Reboot the device
-
-
     global ev_kit
     # Open the UART port to the BLE module (adjust COM port + baud as needed).
     ev_kit = serial.Serial(serial_port_par, baudrate=115200, timeout=1)
 
-
-
+    # Reboot the device.
     success, error_code, response = reboot_device()
     if success:
         print("Rebooted device successfully")
@@ -1124,10 +1231,10 @@ def init_device(serial_port_par:str, device_name:str) -> tuple:
         print("Failed to reboot device:", get_error_description(error_code))
         return False, ev_kit
 
-    # Wait a short period for the device to fully reboot
+    # Wait a short period for the device to fully reboot.
     sleep(1)
 
-    # Configure extended advertisement parameters
+    # Configure extended advertisement parameters.
     success, error_code, response = extended_adv_config()
     if success:
         print("Extended advertisement parameters configured successfully")
@@ -1135,16 +1242,15 @@ def init_device(serial_port_par:str, device_name:str) -> tuple:
         print("Failed to configure extended advertisement parameters:", get_error_description(error_code))
         return False, ev_kit
 
-    # Erase any existing advertisement payload
-    success, error_code, response = send_custom_command_text("SERD,T=00,D=")
+    # Erase any existing advertisement payload using SEAD with T=00.
+    success, error_code, response = send_custom_command_text("SEAD,T=00,D=")
     if success:
         print("Cleared existing advertisement payload")
     else:
         print("Failed to clear advertisement payload:", get_error_description(error_code))
         return False, ev_kit
 
-
-
+    # Set the extended device name.
     success, error_code, response = set_device_name_extended(device_name)
     if success:
         print("Extended device name set successfully")
@@ -1152,12 +1258,7 @@ def init_device(serial_port_par:str, device_name:str) -> tuple:
         print("Failed to set extended device name:", get_error_description(error_code))
         return False, ev_kit
 
-
-
-
-
     return True, ev_kit
-
 
 
 
@@ -1171,17 +1272,6 @@ def close_device(ev_kit:serial.Serial):
     # Make sure we close the serial port on exit
     ev_kit.close()
     print("Connection closed.")
-
-
-
-
-
-
-
-
-
-
-
 
 
 
