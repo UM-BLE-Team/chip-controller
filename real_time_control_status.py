@@ -19,7 +19,7 @@ from evkit_lib import (
 
 # Experiment parameters
 payload_update_interval = 6  # seconds between payload updates
-display_refresh_rate = 120    # display refresh rate in Hz
+display_refresh_rate = 100    # display refresh rate in Hz
 adv_interval_ms = 20  # starting value (must be between 20 and 10240)
 adv_interval_jump_amount = 500 #the ms amount of up or down by keyboard input
 
