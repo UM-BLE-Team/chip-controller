@@ -1,4 +1,3 @@
-
 """
 Title: Extended Advertising Payload Experiment Script
 
@@ -8,18 +7,19 @@ Description:
 
     The experiment works as follows:
       - The initial payload is set with the first 5 bytes of the default message.
-      - In each subsequent update (up to a maximum of 7 rounds), 24 bytes of text are appended.
+      - In each subsequent update (from round 2 to MAX_ROUNDS), 24 bytes of text are appended.
         This 24-byte addition, along with the AD header overhead, results in an overall 32-byte
         increase in the payload.
-      - The payload is updated every 5000 advertising packets (~100 seconds per update at 50 Hz).
+      - The payload is updated every PACKETS_PER_ROUND advertising packets.
       - The script prints detailed status information including elapsed time, packet count,
-        current payload size, and the most recently appended text.
+        current round, current custom payload size, device total payload size, the expected time
+        until the next update, and the most recently appended text.
 
 Usage:
     - Ensure the evkit_lib module is in the Python path.
     - Run the script and input the COM port number when prompted.
     - The script will initialize the BLE device, set the advertising interval, and then
-      perform payload updates for up to 7 rounds or until a payload size limit is reached.
+      perform payload updates for up to MAX_ROUNDS rounds or until a payload size limit is reached.
 
 Author: Hamed Esmaeilzadeh
 Date: 2025-03-27
@@ -32,7 +32,7 @@ from evkit_lib import (
     set_adv_interval,
     get_adv_payload_details,
     close_device,
-    send_custom_command_text
+    send_custom_command_text, reboot_device
 )
 
 # Hard-coded default message (Cyrus text, used for payload data)
@@ -62,18 +62,14 @@ current_text_offset = INITIAL_OFFSET
 # We'll also track the complete custom payload locally.
 local_custom_payload = INITIAL_PAYLOAD_CUSTOM
 
-# Number of rounds to perform (7 rounds)
+# Number of rounds to perform (starting at Round 1 up to MAX_ROUNDS)
 MAX_ROUNDS = 7
 
 # Constants for experiment configuration
-ADV_INTERVAL_MS = 20  # Advertising interval in milliseconds
-ADV_FREQUENCY_HZ = 1000 / ADV_INTERVAL_MS  # Advertising frequency in Hz (50 Hz)
-PAYLOAD_LIMIT = 160  # Stop experiment when payload reaches ~160 bytes
-UPDATE_PACKET_THRESHOLD = 5000  # Update payload every 5000 advertising packets
-
-
-
-
+ADV_INTERVAL_MS = 20                # Advertising interval in milliseconds
+ADV_FREQUENCY_HZ = 1000 / ADV_INTERVAL_MS  # Advertising frequency in Hz
+PAYLOAD_LIMIT = 240                 # Stop experiment when payload reaches ~240 bytes
+PACKETS_PER_ROUND = 1000            # Update payload every PACKETS_PER_ROUND advertising packets
 
 def send_initial_payload(custom_data_str: str) -> tuple:
     """
@@ -98,11 +94,6 @@ def send_initial_payload(custom_data_str: str) -> tuple:
     full_payload = length_hex + "FF" + "0900" + data.hex().upper()
     cmd = f"SEAD,T=01,D={full_payload}"
     return send_custom_command_text(cmd)
-
-
-
-
-
 
 def append_payload(append_size: int) -> tuple:
     """
@@ -145,9 +136,6 @@ def append_payload(append_size: int) -> tuple:
     cmd = f"SEAD,T=01,D={payload}"
     return send_custom_command_text(cmd)
 
-
-
-
 def parse_payload_unicode(payload_details) -> str:
     """
     Extract and decode the custom data from the advertising payload details.
@@ -175,10 +163,6 @@ def parse_payload_unicode(payload_details) -> str:
                 return "<decode error>"
     return ""
 
-
-
-
-
 def print_experiment_constants():
     """
     Print experiment configuration and constant values in a formatted manner.
@@ -188,17 +172,10 @@ def print_experiment_constants():
     print(f"  Initial Payload (Custom Data): {INITIAL_PAYLOAD_CUSTOM}  (Length: {len(INITIAL_PAYLOAD_CUSTOM)} bytes)")
     print(f"  Append Increment: {APPEND_INCREMENT} bytes (results in a 32-byte increase per round with overhead)")
     print(f"  Payload Limit: {PAYLOAD_LIMIT} bytes")
-    print(f"  Update Threshold: {UPDATE_PACKET_THRESHOLD} packets")
+    print(f"  Packets Per Round: {PACKETS_PER_ROUND} packets")
     print(f"  Device Name (for init): {DEVICE_NAME}")
     print(f"  Maximum Rounds: {MAX_ROUNDS}")
     print("-" * 70)
-
-
-
-
-
-
-
 
 def main():
     """
@@ -208,11 +185,12 @@ def main():
       - Initializes the BLE device.
       - Sets the advertising interval.
       - Sends the initial advertising payload.
-      - Enters a loop that updates the payload every UPDATE_PACKET_THRESHOLD packets.
-      - Updates are performed for a maximum of MAX_ROUNDS rounds.
+      - Enters a loop that updates the payload every PACKETS_PER_ROUND packets.
+      - Updates are performed for rounds 1 through MAX_ROUNDS.
       - Displays detailed status information including elapsed time, packets sent,
-        current custom payload size, and the text that was most recently appended.
-      - Terminates when either MAX_ROUNDS is reached or an update fails.
+        current round, current custom payload size, device total payload size, the expected time until next update,
+        and the text that was most recently appended.
+      - Terminates when MAX_ROUNDS is reached or if an update fails.
     """
     global local_custom_payload
     print_experiment_constants()
@@ -236,8 +214,8 @@ def main():
         sys.exit(1)
     print(f"Advertising interval set to {ADV_INTERVAL_MS} ms ({ADV_FREQUENCY_HZ:.1f} Hz).")
 
-    # Send the initial payload (5 bytes from DEFAULT_MESSAGE)
-    print("Setting initial payload...")
+    # Send the initial payload (5 bytes from DEFAULT_MESSAGE) as Round 1.
+    print("Setting initial payload (Round 1)...")
     result = send_initial_payload(INITIAL_PAYLOAD_CUSTOM)
     if not result[0]:
         print("Error setting initial payload:", result[2])
@@ -255,13 +233,15 @@ def main():
     local_custom_payload = decoded_payload
 
     print(
-        "\nStarting experiment. Payload will increase by 32 bytes every 5000 packets (~100 seconds) for up to 8 rounds.")
-    print("Experiment ends when 8 rounds are reached or if an update fails.")
+        f"\nStarting experiment. Payload will increase by 32 bytes every {PACKETS_PER_ROUND} packets "
+        f"(~{PACKETS_PER_ROUND/ADV_FREQUENCY_HZ:0.0f} seconds per round) for rounds 1 to {MAX_ROUNDS}."
+    )
+    print("Experiment ends when the maximum rounds are reached or if an update fails.")
 
     start_time = time.time()
-    next_update_threshold = UPDATE_PACKET_THRESHOLD  # 5000 packets
-    packets_per_second = ADV_FREQUENCY_HZ  # 50 packets per second
-    round_count = 0  # Count the update rounds
+    next_update_threshold = PACKETS_PER_ROUND  # first update threshold
+    packets_per_second = ADV_FREQUENCY_HZ
+    round_count = 1  # starting at round 1
 
     # Current custom data size (initially 5 bytes)
     current_custom_data_size = len(INITIAL_PAYLOAD_CUSTOM.encode('utf-8'))
@@ -269,32 +249,40 @@ def main():
     try:
         while True:
             elapsed = time.time() - start_time
-            elapsed_str = f"{elapsed:0.3f} s"
+            # Format elapsed time as whole seconds
+            elapsed_str = f"{elapsed:0.0f} s"
             packets_sent = int(elapsed * packets_per_second)
+            # Calculate time remaining (in seconds) until next update
+            time_remaining = max((next_update_threshold - packets_sent) / packets_per_second, 0)
             # Retrieve the payload details from the device.
             payload_details = get_adv_payload_details()
             decoded_payload = parse_payload_unicode(payload_details)
+            # Compute the total device payload size in bytes from the raw hex string.
+            raw_payload = payload_details[0]
+            device_payload_size = (len(raw_payload) // 2) if raw_payload else 0
+
             status = (
-                f"Elapsed: {elapsed_str} | Packets Sent: {packets_sent:6d} | "
-                f"Custom Data Size: {current_custom_data_size:3d} bytes | Next update: {next_update_threshold:6d} packets | "
-                f"Adv Interval: {ADV_INTERVAL_MS} ms ({ADV_FREQUENCY_HZ:.1f} Hz) | Text Append Increment: {APPEND_INCREMENT} bytes | "
-                f"Total Increment: 32 bytes | Payload Limit: {PAYLOAD_LIMIT} bytes | Decoded (Local): {local_custom_payload}"
+                f"Elapsed: {elapsed_str} | Packets Sent: {packets_sent:6d} | Round: {round_count:2d} | "
+                f"Custom Data Size: {current_custom_data_size:3d} bytes | "
+                f"Device Payload Size: {device_payload_size + 3:3d} bytes | "
+                f"Next update in: {time_remaining:0.0f} s ({next_update_threshold:6d} packets) | "
+                f"Adv Interval: {ADV_INTERVAL_MS} ms ({ADV_FREQUENCY_HZ:.1f} Hz) | "
+                f"Text Append Increment: {APPEND_INCREMENT} bytes | Total Increment: 32 bytes | "
+                f"Payload Limit: {PAYLOAD_LIMIT} bytes | "
             )
             sys.stdout.write("\r\033[K" + status)
             sys.stdout.flush()
 
             if packets_sent >= next_update_threshold:
                 print("\n\n--- Updating payload ---")
-                print(f"Packets: {packets_sent}. Appending {APPEND_INCREMENT} bytes "
-                      f"(24 bytes of text = 32 bytes overall increase with overhead)...")
+                print(f"Packets: {packets_sent}. Appending {APPEND_INCREMENT} bytes (24 bytes of text = 32 bytes overall increase with overhead)...")
                 result = append_payload(APPEND_INCREMENT)
                 if not result[0]:
                     print("Error updating payload:", result[2])
                     break
                 time.sleep(1)
                 # Extract the new filler text that was appended.
-                appended_filler = DEFAULT_MESSAGE.encode('utf-8')[
-                                  len(local_custom_payload): len(local_custom_payload) + APPEND_INCREMENT]
+                appended_filler = DEFAULT_MESSAGE.encode('utf-8')[len(local_custom_payload): len(local_custom_payload) + APPEND_INCREMENT]
                 appended_text = appended_filler.decode('utf-8', errors="replace")
                 # Update our local payload state.
                 local_custom_payload += appended_text
@@ -303,25 +291,18 @@ def main():
                 print("Decoded (Local) Payload:", local_custom_payload)
                 print("Latest payload added text:", appended_text)
                 current_custom_data_size += APPEND_INCREMENT
-                next_update_threshold += UPDATE_PACKET_THRESHOLD
+                next_update_threshold += PACKETS_PER_ROUND
                 round_count += 1
-                if round_count >= MAX_ROUNDS:
-                    print("\nReached maximum of 8 rounds. Ending experiment.")
+                if round_count > MAX_ROUNDS:
+                    print(f"\nReached maximum of {MAX_ROUNDS} rounds. Ending experiment.")
                     break
-            time.sleep(1 / 300)  # update at about 300 Hz
+            time.sleep(1 / 300)  # update at about 300 Hz for smooth real-time display
     except KeyboardInterrupt:
         print("\nExperiment interrupted by user. Shutting down...")
     finally:
+        reboot_device()
         close_device(ev_device)
         print("Connection closed. End of experiment.")
-
-
-
-
-
-
-
-
 
 if __name__ == "__main__":
     main()
